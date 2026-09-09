@@ -54,8 +54,8 @@ if age >= 25:
 
 
 # range --> iterator
-for i in range(10):
-    print(i)
+# for i in range(10):
+#     print(i)
 
 for x in [10,20,33]:
     print(x)
@@ -65,6 +65,6 @@ for x in [10,20,33]:
 #     print(i)
 #     i = i + 1
 
-
+print(True == 1)
 
 
