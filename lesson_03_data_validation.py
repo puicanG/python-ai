@@ -18,10 +18,14 @@ class UserValidator(BaseModel):
     adress: Address
 
 received_user = {
-    "name": "Vicenntiu",
-    "age": 25,
-    "nationality": "Romanian"
-}
+        "name": "Vicenntiu",
+        "age": 25,
+        "nationality": "Romanian",
+        "adress": {
+            "city": "Brasov",
+            "street": "Principala"
+        }
+    }
 print("========Validations=========")
 
 #try catch
