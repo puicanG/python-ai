@@ -18,7 +18,7 @@ class UserValidator(BaseModel):
     adress: Address
 
 received_user = {
-        "name": "Vicenntiu",
+        "name": "Vicentiu",
         "age": 25,
         "nationality": "Romanian",
         "adress": {
@@ -26,23 +26,25 @@ received_user = {
             "street": "Principala"
         }
     }
-print("========Validations=========")
 
-#try catch
-try:
-    validated_user = UserValidator.model_validate(received_user, strict=True)
-    print(validated_user)
-except ValidationError as e:
-    print(e)
-    print(e.errors)
-finally:
-    print("Validare completa")
+if __name__ == "__main__":
 
-varx = None
-print(varx)
+    print("========Validations=========")
+    #try catch
+    try:
+        validated_user = UserValidator.model_validate(received_user, strict=True)
+        print(validated_user)
+    except ValidationError as e:
+        print(e)
+        print(e.errors)
+    finally:
+        print("Validare completa")
 
-def function2():
-    v = 10
-    v += 20
-    return None
+    varx = None
+    print(varx)
+
+    def function2():
+        v = 10
+        v += 20
+        return None
 

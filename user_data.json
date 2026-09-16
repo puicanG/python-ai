@@ -1,0 +1,9 @@
+{
+        "name": "Vicentiu",
+        "age": 25,
+        "nationality": "Romanian",
+        "adress": {
+            "city": "Brasov",
+            "street": "Principala"
+        }
+}
