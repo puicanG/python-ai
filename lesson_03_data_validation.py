@@ -1,44 +1,45 @@
+from pydantic import BaseModel, ValidationError, Field
+from lesson_02_classes_objects import User
 from typing import Literal
 
-from pydantic import BaseModel,ValidationError, Field
-from lesson_02_classes_objects import User
-
-#mostenire. inheritage
+# mostenire. inheritance.
 
 class Address(BaseModel):
-    street_address: str
     city: str
-
+    street: str
 
 class UserValidator(BaseModel):
-    name: str = Field(min_length=1, max_length=10)
+    name: str = Field(min_length=2, max_length=10)
     age: int = Field(ge=0, le=120, default=18)
-    nationality: Literal["Romanian", "Moldovean"]
+    nationality: Literal["Romanian", "Moldovean"] = "Moldovean"
     external: bool | None = None
-    adress: Address
+    address: Address
+
 
 received_user = {
-        "name": "Vicentiu",
-        "age": 25,
-        "nationality": "Romanian",
-        "adress": {
-            "city": "Brasov",
-            "street": "Principala"
-        }
+    "name": "Vicentiu",
+    "age": 25,
+    "nationality": "Romanian",
+    "address": {
+        "city": "Brasso",
+        "street": "Principala"
     }
+}
 
 if __name__ == "__main__":
+    print("==============Validations================")
 
-    print("========Validations=========")
-    #try catch
+    # try-catch (except)
+
     try:
         validated_user = UserValidator.model_validate(received_user, strict=True)
+        print(validated_user.name)
         print(validated_user)
     except ValidationError as e:
         print(e)
-        print(e.errors)
+        print(e.errors())
     finally:
-        print("Validare completa")
+        print("am terminat cu validarea")
 
     varx = None
     print(varx)
@@ -46,5 +47,8 @@ if __name__ == "__main__":
     def function2():
         v = 10
         v += 20
-        return None
 
+        # return-ul este implicit None
+        # return None
+
+    print(function2())
