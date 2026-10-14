@@ -10,28 +10,32 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sentence_transformers import SentenceTransformer
-from rank_bm25 import BM25Okapi, BM25
+from rank_bm25 import BM25Okapi
 import re
 
 
 # incarcam fisierul -> chunk-uri (spargem bucati) -> embeddings -> incarcam in baza de date vectoriala -> semantic search pe DB vectorial -> returnam rezultatele.
-# pentru hybrid search: calculam pentru chunk-urile care ne intereseaza, un scor. La fel si pentru intrebare. Verificam intrebarea cu fiecare chunk
-# extragem un scor si o integram cu scorurile de la semantic search (BM25)
+# pentru hybrid search: calculam pentru toate chunk-urile care ne intereseaza, un scor. la fel si pentru intrebare. verificam intrebarea cu fiecare <-> chunk
+# extragem un scor, si o integram cu scorurile de la semantic search.
+
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 COLLECTION_NAME = "pdf_chunks"
 FILE_PATH = "StarMaker.pdf"
+INVOICES_FILE_PATH = "invoices.pdf"
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
 HYBRID_SEARCH_RESULT_COUNT = 8
+
 
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(description="Question about the contents of StarMaker.pdf.")
 
+
 def tokenize(text: str) -> list[str]:
-    return  re.findall(r"\b\w+\b", text.lower())
+    return re.findall(r"\b\w+\b", text.lower())
 
 
 def chunk_text(text: str) -> list[str]:
@@ -96,7 +100,8 @@ def index_file(collection, model, file_path):
         metadatas=metadatas,
     )
 
-    return documents
+    return documents, metadatas
+
 
 def complete(client: OpenAI, messages: list[dict], tools: list[dict]):
     return client.chat.completions.create(
@@ -106,27 +111,75 @@ def complete(client: OpenAI, messages: list[dict], tools: list[dict]):
         tool_choice="auto",
     ).choices[0].message
 
-def hybrid_search (collection, model, bm25, documents, args):
+
+def hybrid_search(collection, model, bm25, documents, metadatas, args):
     request = SearchRequest.model_validate(json.loads(args))
     question = request.question
     question_vector = model.encode(question, normalize_embeddings=True).tolist()
 
-    #o sa ne folosim de 2 seturi de rezultate si le combinam pentru un scor hybrid.
+    # o sa ne folosim de 2 seturi de rezultate, si le combinam pentru un scor hibrid.
+    # intai facem cautare semantica.
     semantic_results = collection.query(
-            query_embeddings=[question_vector],
-            n_results=HYBRID_SEARCH_RESULT_COUNT,
-            include=["documents", "metadatas", "distances"],
-        )
+        query_embeddings=[question_vector],
+        n_results=HYBRID_SEARCH_RESULT_COUNT,
+        include=["documents", "metadatas", "distances"],
+    )
 
     hybrid_scores = {}
-    ids = semantic_results["ids"]
+    semantic_documents = semantic_results["documents"][0]
 
-    # 1 -> 1, 2 -> 0,5, 3 -> 0.33, 4 -> 0.25
+    # Rank 0 receives 1 point, rank 1 receives 1/2 point, and so on.
+    rank = 0
+    for document in semantic_documents:
+        # Find this semantic result's position in the original documents list.
+        chunk_index = documents.index(document)
+        hybrid_scores[chunk_index] = 1 / (rank + 1)
+        rank += 1
 
-    for rank in range(len(ids)):
-        id_from_ids = ids[rank]
-        chunk_index = int(id_from_ids)
+    bm25_scores = bm25.get_scores(tokenize(question))
+    bm25_results = []
+    chunk_index = 0
+    for score in bm25_scores:
+        bm25_results.append((score, chunk_index))
+        chunk_index += 1
+    bm25_results.sort(reverse=True)
 
+    rank = 0
+    for _, chunk_index in bm25_results[:HYBRID_SEARCH_RESULT_COUNT]:
+        if chunk_index not in hybrid_scores:
+            hybrid_scores[chunk_index] = 0
+        hybrid_scores[chunk_index] += 1 / (rank + 1)
+        rank += 1
+
+    combined_results = []
+    for chunk_index, score in hybrid_scores.items():
+        combined_results.append((score, chunk_index))
+    combined_results.sort(reverse=True)
+
+    results = []
+    for _, chunk_index in combined_results[:HYBRID_SEARCH_RESULT_COUNT]:
+        results.append(
+            f"{documents[chunk_index]}\nSource: {metadatas[chunk_index]['source']}, page {metadatas[chunk_index]['page']}"
+        )
+    return results
+
+
+def answer_with_hybrid_context(client: OpenAI, args: str, documents: list[str]) -> str:
+    try:
+        request = SearchRequest.model_validate(json.loads(args))
+        context = "\n\n".join(documents)
+        return client.chat.completions.create(
+            model=os.getenv("OPEN_ROUTER_MODEL_NAME"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Answer only from the supplied context. If it does not answer the question, say so.",
+                },
+                {"role": "user", "content": f"Question: {request.question}\n\nContext:\n{context}"},
+            ],
+        ).choices[0].message.content
+    except (json.JSONDecodeError, ValidationError) as error:
+        return f"error: {error}"
 
 
 def answer_with_context(client: OpenAI, collection, model, args: str) -> str:
@@ -176,11 +229,15 @@ def main():
         name=COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},
     )
-    documents = index_file(collection, model, Path(FILE_PATH))
+    documents = []
+    metadatas = []
+    for file_path in [FILE_PATH, INVOICES_FILE_PATH]:
+        file_documents, file_metadatas = index_file(collection, model, Path(file_path))
+        documents.extend(file_documents)
+        metadatas.extend(file_metadatas)
 
-#alt pas de indexare, unde calculam vectorii pentru BM25
-    #intai tokenizam chunk-urile
-
+    # alt pas de indexare, unde calculam vectorii pentru BM25
+    # intai, tokenizam chunk-urile
     tokenized_documents = []
     for doc in documents:
         tokens = tokenize(doc)
@@ -193,7 +250,7 @@ def main():
             "type": "function",
             "function": {
                 "name": "search_starmaker",
-                "description": "Searches StarMaker.pdf and answers from it. Use only when the user asks about StarMaker.pdf or its contents.",
+                "description": "Searches StarMaker.pdf and invoices.pdf and answers from them. Use only when the user asks about their contents.",
                 "parameters": SearchRequest.model_json_schema(),
             },
         }
@@ -201,7 +258,7 @@ def main():
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant. Use search_starmaker only for questions about StarMaker.pdf or its contents. Use it before answering those questions. Answer other questions normally.",
+            "content": "You are a helpful assistant. Use search_starmaker only for questions about StarMaker.pdf, invoices.pdf, or their contents. Use it before answering those questions. Answer other questions normally.",
         }
     ]
 
@@ -217,8 +274,8 @@ def main():
         if response.tool_calls:
             for tool_call in response.tool_calls:
                 if tool_call.function.name == "search_starmaker":
-                    results = hybrid_search(collection, model, bm25, documents, tool_call.function.arguments)
-                    output = answer_with_context(client, collection, model, tool_call.function.arguments)
+                    results = hybrid_search(collection, model, bm25, documents, metadatas, tool_call.function.arguments)
+                    output = answer_with_hybrid_context(client, tool_call.function.arguments, results)
                 else:
                     output = f"error: unknown tool {tool_call.function.name}"
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": output})
